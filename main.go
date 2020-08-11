@@ -1,8 +1,6 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -20,29 +20,21 @@ func inConfig() (*rest.Config, error) {
 	return rest.InClusterConfig()
 }
 
-func outConfig() (*rest.Config, error) {
-	var kubeconfig *string
+func main() {
+	pflag.String("kubeconfig", "", "(optional) absolute path to the kubeconfig file")
+	pflag.String("namespace", "", "Specifies the namespace in which to run")
+	pflag.String("selector", "", "Specifies the label selector to use for targeted endpoints")
+	pflag.Parse()
+
 	if home := os.Getenv("HOME"); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+		viper.SetDefault("kubeconfig", filepath.Join(home, ".kube", "config"))
 	}
-	flag.Parse()
+	viper.SetDefault("selector", "app.kubernetes.io/type=varnish")
+	viper.AutomaticEnv()
+	viper.BindPFlags(pflag.CommandLine)
 
 	// use the current context in kubeconfig
-	return clientcmd.BuildConfigFromFlags("", *kubeconfig)
-}
-
-type purgeHandler struct {
-}
-
-func (p *purgeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("PurgeHandler")
-}
-
-func main() {
-	// config, err := inConfig()
-	config, err := outConfig()
+	config, err := clientcmd.BuildConfigFromFlags("", viper.GetString(("kubeconfig")))
 	if err != nil {
 		panic(err.Error())
 	}
@@ -51,7 +43,8 @@ func main() {
 		panic(err.Error())
 	}
 
-	controller := NewEndpointLoggingController(clientset)
+	addressList := NewAddressList()
+	controller := NewEndpointLoggingController(clientset, addressList, viper.GetString("namespace"), viper.GetString("selector"))
 	stop := make(chan struct{})
 	defer close(stop)
 
@@ -62,8 +55,9 @@ func main() {
 		}
 	}()
 
+	h := NewPurgeHandler(addressList)
 	r := mux.NewRouter()
-	r.Methods("PURGE", "BAN").Handler(&purgeHandler{})
+	r.Methods("PURGE", "BAN").Handler(h)
 	s := &http.Server{
 		Addr:           ":8080",
 		Handler:        r,
