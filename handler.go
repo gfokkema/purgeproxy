@@ -43,9 +43,15 @@ func (p *purgeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			body += fmt.Sprintf("[%v] Error: %s\n", result.addr, result.err)
 			continue
 		}
-
-		klog.Infof("[%s] OK: %s", result.addr, result.result)
-		body += fmt.Sprintf("[%v] OK: %s", result.addr, result.result)
+		httpres := result.result.(*http.Response)
+		if httpres.StatusCode != 200 {
+			code = httpres.StatusCode
+			klog.Errorf("[%s] Error: (%d %s)", result.addr, httpres.StatusCode, httpres.Status)
+			body += fmt.Sprintf("[%s] Error: (%d %s)\n", result.addr, httpres.StatusCode, httpres.Status)
+			continue
+		}
+		klog.Infof("[%v] OK: (%d %s)", result.addr, httpres.StatusCode, httpres.Status)
+		body += fmt.Sprintf("[%v] OK: (%d %s)\n", result.addr, httpres.StatusCode, httpres.Status)
 	}
 	w.WriteHeader(code)
 	w.Write([]byte(body))
