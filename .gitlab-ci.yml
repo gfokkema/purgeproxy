@@ -1,0 +1,48 @@
+stages:
+- build
+
+# --------------------------------------------------------
+
+build:
+  image: docker:latest
+  stage: build
+  services:
+  - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+  script:
+  - build
+  tags:
+  - privileged
+  - dind
+
+# --------------------------------------------------------
+
+.auto_devops: &auto_devops |
+  # Auto DevOps variables and functions
+  [[ "$TRACE" ]] && set -x
+
+  docker_login() {
+    docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  }
+
+  docker_logout() {
+    docker logout ${CI_REGISTRY}
+  }
+
+  build() {
+    docker_login
+
+    # Build prod version
+    docker build --pull --no-cache \
+      --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:latest \
+      .
+
+    # Push prod version
+    docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:latest
+
+    docker_logout
+  }
+
+before_script:
+- *auto_devops

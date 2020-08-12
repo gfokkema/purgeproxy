@@ -16,25 +16,31 @@ import (
 	"k8s.io/klog"
 )
 
-func inConfig() (*rest.Config, error) {
-	return rest.InClusterConfig()
-}
-
 func main() {
+	pflag.Bool("kubecluster", false, "(optional) specifies whether run in cluster or not")
 	pflag.String("kubeconfig", "", "(optional) absolute path to the kubeconfig file")
-	pflag.String("namespace", "", "Specifies the namespace in which to run")
-	pflag.String("selector", "", "Specifies the label selector to use for targeted endpoints")
+	pflag.String("kubenamespace", "", "Specifies the namespace in which to run")
+	pflag.String("kubeselector", "", "Specifies the label selector to use for targeted endpoints")
 	pflag.Parse()
 
 	if home := os.Getenv("HOME"); home != "" {
 		viper.SetDefault("kubeconfig", filepath.Join(home, ".kube", "config"))
 	}
-	viper.SetDefault("selector", "app.kubernetes.io/type=varnish")
+	viper.SetDefault("kubeselector", "app.kubernetes.io/type=varnish")
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
 
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", viper.GetString(("kubeconfig")))
+	var (
+		config *rest.Config
+		err    error
+	)
+	if viper.GetBool("kubecluster") {
+		// use the in cluster config
+		config, err = rest.InClusterConfig()
+	} else {
+		// use the current context in kubeconfig
+		config, err = clientcmd.BuildConfigFromFlags("", viper.GetString(("kubeconfig")))
+	}
 	if err != nil {
 		panic(err.Error())
 	}
@@ -44,7 +50,7 @@ func main() {
 	}
 
 	addressList := NewAddressList()
-	controller := NewEndpointLoggingController(clientset, addressList, viper.GetString("namespace"), viper.GetString("selector"))
+	controller := NewEndpointLoggingController(clientset, addressList, viper.GetString("kubenamespace"), viper.GetString("kubeselector"))
 	stop := make(chan struct{})
 	defer close(stop)
 
