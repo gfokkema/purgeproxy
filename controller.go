@@ -15,9 +15,27 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+type Address struct {
+	ip   string
+	port int32
+}
+
+func (a Address) String() string {
+	return fmt.Sprintf("%s:%d", a.ip, a.port)
+}
+
+type AddressRef struct {
+	ip   v1.EndpointAddress
+	port v1.EndpointPort
+}
+
+func (a AddressRef) String() string {
+	return fmt.Sprintf("(%s:%d, %s)", a.ip.IP, a.port.Port, a.ip.TargetRef.Name)
+}
+
 // AddressList contains a unique list of IPs
 type AddressList struct {
-	list map[string]v1.EndpointAddress
+	list map[Address]AddressRef
 	mux  sync.RWMutex
 }
 
@@ -27,11 +45,14 @@ func (l *AddressList) Add(endpoint *v1.Endpoints) {
 	defer l.mux.Unlock()
 
 	for _, sub := range endpoint.Subsets {
+		// From the docs on EndpointSubset:
+		// "The expanded set of endpoints is the Cartesian product of Addresses x Ports."
 		for _, addr := range sub.Addresses {
-			l.list[addr.IP] = addr
+			for _, port := range sub.Ports {
+				l.list[Address{addr.IP, port.Port}] = AddressRef{addr, port}
+			}
 		}
 	}
-
 }
 
 // Remove the values contained in `endpoint` from AddressList
@@ -40,23 +61,27 @@ func (l *AddressList) Remove(endpoint *v1.Endpoints) {
 	defer l.mux.Unlock()
 
 	for _, sub := range endpoint.Subsets {
+		// From the docs on EndpointSubset:
+		// "The expanded set of endpoints is the Cartesian product of Addresses x Ports."
 		for _, addr := range sub.Addresses {
-			delete(l.list, addr.IP)
+			for _, port := range sub.Ports {
+				delete(l.list, Address{addr.IP, port.Port})
+			}
 		}
 	}
 }
 
 // ExecuteFunc will be executed on each entry in AddressList
-type ExecuteFunc func(string, v1.EndpointAddress) (interface{}, error)
+type ExecuteFunc func(Address, AddressRef) (interface{}, error)
 
 // ExecuteResult stores the result of executing ExecuteFunc
 type ExecuteResult struct {
-	addr   string
+	addr   Address
 	result interface{}
 	err    error
 }
 
-// Execute f for all values contained in AddressList
+// Execute f on all values contained in AddressList
 func (l *AddressList) Execute(f ExecuteFunc) chan ExecuteResult {
 	var wg sync.WaitGroup
 	c := make(chan ExecuteResult)
@@ -67,7 +92,7 @@ func (l *AddressList) Execute(f ExecuteFunc) chan ExecuteResult {
 
 		for addr, endpoint := range l.list {
 			wg.Add(1)
-			go func(addr string, endpoint v1.EndpointAddress, c chan ExecuteResult) {
+			go func(addr Address, endpoint AddressRef, c chan ExecuteResult) {
 				defer wg.Done()
 				resp, err := f(addr, endpoint)
 				c <- ExecuteResult{addr, resp, err}
@@ -88,15 +113,15 @@ func (l *AddressList) List() {
 	l.mux.RUnlock()
 
 	klog.Infoln("LIST:")
-	for addr, endpoint := range l.list {
-		klog.Infof("(%s, %s)\n", addr, endpoint.TargetRef.Name)
+	for _, endpoint := range l.list {
+		klog.Info(endpoint)
 	}
 }
 
 // NewAddressList returns an empty list of addressList
 func NewAddressList() *AddressList {
 	return &AddressList{
-		make(map[string]v1.EndpointAddress),
+		make(map[Address]AddressRef),
 		sync.RWMutex{},
 	}
 }
